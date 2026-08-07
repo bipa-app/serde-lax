@@ -106,6 +106,9 @@ Supported shapes: structs with named fields, and enums where every variant is a 
 - **Strict types, rich reporting.** No coercion — `"1500"` is not a `u64`. The laxness is in *how much* gets reported, not in what's accepted.
 - `Option<T>` treats both missing and `null` as `None`.
 - Unknown JSON fields are ignored.
+- Duplicate object keys keep the last value (`serde_json` behavior).
+- Integers beyond the 64-bit range arrive as lossy `f64` values from the parser, so integer targets reject them with a float in the message.
+- `f32` rejects numbers whose magnitude overflows `f32` (no silent infinity).
 - JSON-only by design.
 - Rendered errors show at most the first 100 issues, with a `… and N more issues (not shown)` summary line; `Error::issues()` always contains all of them.
 - Implementations provided for: integers, floats, `bool`, `String`, `Option`, `Vec`, `HashMap`/`BTreeMap`, `Box`, `serde_json::Value`.

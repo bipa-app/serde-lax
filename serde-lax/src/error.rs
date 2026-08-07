@@ -289,6 +289,20 @@ mod tests {
     }
 
     #[test]
+    fn long_multibyte_strings_are_truncated_to_forty_chars() {
+        let long = "😀".repeat(45);
+        assert_eq!(
+            describe_value(&json!(long)),
+            "string \"😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀…\""
+        );
+    }
+
+    #[test]
+    fn escaped_quotes_and_newlines_use_debug_rendering() {
+        assert_eq!(describe_value(&json!("a\"b\nc")), "string \"a\\\"b\\nc\"");
+    }
+
+    #[test]
     fn forty_char_strings_are_not_truncated() {
         let exact = "yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy";
         assert_eq!(
