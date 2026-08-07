@@ -155,6 +155,54 @@ fn with_serde_decodes_foreign_types_and_records_custom_errors() {
 }
 
 #[derive(Debug, PartialEq, Deserialize)]
+struct PathedNetworkConfig {
+    #[lax(with_serde)]
+    addr: std::net::IpAddr,
+}
+
+#[test]
+fn with_serde_renders_pathed_types_without_token_spacing() {
+    let missing = serde_lax::from_str::<PathedNetworkConfig>("{}").expect_err("must fail");
+    assert_eq!(
+        missing.to_string().lines().last(),
+        Some("  at $.addr: missing required field (expected std::net::IpAddr)")
+    );
+
+    let invalid = serde_lax::from_str::<PathedNetworkConfig>(r#"{"addr":"not-an-ip"}"#)
+        .expect_err("must fail");
+    assert_eq!(
+        invalid.to_string().lines().last(),
+        Some("  at $.addr: invalid std::net::IpAddr: invalid IP address syntax")
+    );
+}
+
+#[derive(Debug, PartialEq, Deserialize)]
+struct GenericSerdeConfig {
+    #[lax(with_serde)]
+    addrs: Vec<std::net::IpAddr>,
+    #[lax(with_serde)]
+    ports: std::collections::HashMap<String, u8>,
+}
+
+#[test]
+fn with_serde_renders_generic_types_without_token_spacing() {
+    let missing = serde_lax::from_str::<GenericSerdeConfig>("{}").expect_err("must fail");
+    assert_eq!(
+        missing.to_string(),
+        "failed to decode into object `GenericSerdeConfig`: 2 issues\n  at $.addrs: missing required field (expected Vec<std::net::IpAddr>)\n  at $.ports: missing required field (expected std::collections::HashMap<String, u8>)"
+    );
+
+    let invalid = serde_lax::from_str::<GenericSerdeConfig>(
+        r#"{"addrs":["not-an-ip"],"ports":{"http":256}}"#,
+    )
+    .expect_err("must fail");
+    assert_eq!(
+        invalid.to_string(),
+        "failed to decode into object `GenericSerdeConfig`: 2 issues\n  at $.addrs: invalid Vec<std::net::IpAddr>: invalid IP address syntax\n  at $.ports: invalid std::collections::HashMap<String, u8>: invalid value: integer `256`, expected u8"
+    );
+}
+
+#[derive(Debug, PartialEq, Deserialize)]
 struct DropIn {
     id: u64,
     label: String,

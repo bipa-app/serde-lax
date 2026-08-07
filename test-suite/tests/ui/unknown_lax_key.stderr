@@ -1,0 +1,5 @@
+error: unsupported #[lax] container attribute; supported: rename_all, no_serde
+ --> tests/ui/unknown_lax_key.rs:2:7
+  |
+2 | #[lax(bogus)]
+  |       ^^^^^

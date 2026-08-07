@@ -1,11 +1,11 @@
 //! Derive macro for `serde-lax`.
 
 use proc_macro::TokenStream;
-use proc_macro2::TokenStream as TokenStream2;
-use quote::{format_ident, quote};
+use proc_macro2::{Delimiter, TokenStream as TokenStream2, TokenTree};
+use quote::{format_ident, quote, ToTokens};
 use syn::{
-    parse_macro_input, Attribute, Data, DataEnum, DataStruct, DeriveInput, Fields, Ident, LitStr,
-    Path, Type,
+    parse_macro_input, spanned::Spanned, Attribute, Data, DataEnum, DataStruct, DeriveInput,
+    Fields, Ident, LitStr, Path, Type,
 };
 
 const SUPPORTED_SHAPES: &str = "serde-lax v0.1 supports only non-generic structs with named fields and enums whose variants are all unit variants";
@@ -260,8 +260,13 @@ fn expand_struct(
         let key = LitStr::new(&key, field_ident.span());
         let holder = format_ident!("__serde_lax_field_{index}");
         let ty = field.ty;
-        let present = present_field_decoder(&ty, options.with_serde);
-        let missing = missing_field_decoder(&ty, &key, &options);
+        let serde_type = if options.with_serde {
+            Some(LitStr::new(&type_display_name(&ty), ty.span()))
+        } else {
+            None
+        };
+        let present = present_field_decoder(&ty, serde_type.as_ref());
+        let missing = missing_field_decoder(&ty, &key, &options, serde_type.as_ref());
 
         decoders.push(quote! {
             let #holder = match __serde_lax_object.get(#key) {
@@ -355,15 +360,115 @@ fn parse_field_options(attributes: &[Attribute]) -> syn::Result<FieldOptions> {
     Ok(options)
 }
 
-fn present_field_decoder(ty: &Type, with_serde: bool) -> TokenStream2 {
-    if with_serde {
+fn type_display_name(ty: &Type) -> String {
+    render_token_stream(ty.to_token_stream())
+}
+
+#[derive(Clone, Copy)]
+enum DisplayTokenKind {
+    Word,
+    Punctuation,
+    Group,
+}
+
+struct DisplayToken {
+    text: String,
+    kind: DisplayTokenKind,
+}
+
+fn render_token_stream(stream: TokenStream2) -> String {
+    let mut rendered = String::new();
+    let mut previous: Option<DisplayToken> = None;
+    let mut tokens = stream.into_iter().peekable();
+
+    while let Some(token) = tokens.next() {
+        let current = match token {
+            TokenTree::Group(group) => {
+                let contents = render_token_stream(group.stream());
+                let text = match group.delimiter() {
+                    Delimiter::Parenthesis => format!("({contents})"),
+                    Delimiter::Brace => format!("{{{contents}}}"),
+                    Delimiter::Bracket => format!("[{contents}]"),
+                    Delimiter::None => contents,
+                };
+                DisplayToken {
+                    text,
+                    kind: DisplayTokenKind::Group,
+                }
+            }
+            TokenTree::Ident(ident) => DisplayToken {
+                text: ident.to_string(),
+                kind: DisplayTokenKind::Word,
+            },
+            TokenTree::Literal(literal) => DisplayToken {
+                text: literal.to_string(),
+                kind: DisplayTokenKind::Word,
+            },
+            TokenTree::Punct(punctuation) => {
+                let mut text = punctuation.as_char().to_string();
+                let mut spacing = punctuation.spacing();
+                while spacing == proc_macro2::Spacing::Joint {
+                    let Some(TokenTree::Punct(next)) = tokens.peek() else {
+                        break;
+                    };
+                    text.push(next.as_char());
+                    spacing = next.spacing();
+                    tokens.next();
+                }
+                DisplayToken {
+                    text,
+                    kind: DisplayTokenKind::Punctuation,
+                }
+            }
+        };
+
+        if previous
+            .as_ref()
+            .is_some_and(|previous| tokens_need_space(previous, &current))
+        {
+            rendered.push(' ');
+        }
+        rendered.push_str(&current.text);
+        previous = Some(current);
+    }
+
+    rendered
+}
+
+fn tokens_need_space(previous: &DisplayToken, current: &DisplayToken) -> bool {
+    if matches!(current.kind, DisplayTokenKind::Group) {
+        return previous.text == "," || previous.text == ";";
+    }
+    if matches!(previous.kind, DisplayTokenKind::Group) {
+        return matches!(current.kind, DisplayTokenKind::Word) || is_spaced_operator(&current.text);
+    }
+    if matches!(previous.kind, DisplayTokenKind::Word)
+        && matches!(current.kind, DisplayTokenKind::Word)
+    {
+        return true;
+    }
+    if previous.text == "," || previous.text == ";" {
+        return true;
+    }
+    if is_spaced_operator(&previous.text) || is_spaced_operator(&current.text) {
+        return true;
+    }
+    previous.text == ">" && matches!(current.kind, DisplayTokenKind::Word)
+}
+
+fn is_spaced_operator(token: &str) -> bool {
+    matches!(token, "+" | "=" | "->" | "|" | "as")
+}
+
+fn present_field_decoder(ty: &Type, serde_type: Option<&LitStr>) -> TokenStream2 {
+    if let Some(serde_type) = serde_type {
         quote! {
             match ::serde_lax::__private::serde_json::from_value::<#ty>(__serde_lax_value.clone()) {
                 Ok(__serde_lax_decoded) => Some(__serde_lax_decoded),
                 Err(__serde_lax_error) => {
                     __serde_lax_cx.custom(::std::format!(
                         "invalid {}: {}",
-                        stringify!(#ty),
+                        #serde_type,
                         __serde_lax_error,
                     ));
                     None
@@ -377,7 +482,12 @@ fn present_field_decoder(ty: &Type, with_serde: bool) -> TokenStream2 {
     }
 }
 
-fn missing_field_decoder(ty: &Type, key: &LitStr, options: &FieldOptions) -> TokenStream2 {
+fn missing_field_decoder(
+    ty: &Type,
+    key: &LitStr,
+    options: &FieldOptions,
+    serde_type: Option<&LitStr>,
+) -> TokenStream2 {
     if let Some(default) = &options.default {
         return match default {
             FieldDefault::Trait => quote! { Some(<#ty as ::std::default::Default>::default()) },
@@ -388,10 +498,9 @@ fn missing_field_decoder(ty: &Type, key: &LitStr, options: &FieldOptions) -> Tok
         return quote! { Some(None) };
     }
 
-    let expected = if options.with_serde {
-        quote! { stringify!(#ty) }
-    } else {
-        quote! { <#ty as ::serde_lax::FromJson>::expected() }
+    let expected = match serde_type {
+        Some(serde_type) => quote! { #serde_type },
+        None => quote! { <#ty as ::serde_lax::FromJson>::expected() },
     };
     quote! {{
         __serde_lax_cx.missing_field(#key, #expected);
@@ -540,5 +649,32 @@ fn reject_attribute_value(meta: &syn::meta::ParseNestedMeta<'_>, message: &str) 
         Err(meta.error(message))
     } else {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::type_display_name;
+    use syn::Type;
+
+    #[test]
+    fn type_display_name_renders_compact_readable_types() {
+        let cases = [
+            ("std::net::IpAddr", "std::net::IpAddr"),
+            ("Vec<std::net::IpAddr>", "Vec<std::net::IpAddr>"),
+            (
+                "std::collections::HashMap<String, u64>",
+                "std::collections::HashMap<String, u64>",
+            ),
+            ("Vec<Vec<u8>>", "Vec<Vec<u8>>"),
+            ("(u8, String)", "(u8, String)"),
+            ("&'static str", "&'static str"),
+            ("[u8; 4]", "[u8; 4]"),
+        ];
+
+        for (source, expected) in cases {
+            let ty: Type = syn::parse_str(source).expect("test type must parse");
+            assert_eq!(type_display_name(&ty), expected, "source: {source}");
+        }
     }
 }

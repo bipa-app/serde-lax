@@ -10,3 +10,4 @@ repository.workspace = true
 [dev-dependencies]
 serde-lax = { path = "../serde-lax" }
 serde_json = { workspace = true }
+trybuild = "1"

@@ -1,0 +1,5 @@
+error: rename_all must be one of: camelCase, snake_case, SCREAMING_SNAKE_CASE, kebab-case, PascalCase, lowercase, UPPERCASE
+ --> tests/ui/invalid_rename_all.rs:2:20
+  |
+2 | #[lax(rename_all = "bogus")]
+  |                    ^^^^^^^

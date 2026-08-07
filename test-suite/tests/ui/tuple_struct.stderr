@@ -1,0 +1,5 @@
+error: serde-lax v0.1 supports only non-generic structs with named fields and enums whose variants are all unit variants
+ --> tests/ui/tuple_struct.rs:2:8
+  |
+2 | struct TupleStruct(u64);
+  |        ^^^^^^^^^^^

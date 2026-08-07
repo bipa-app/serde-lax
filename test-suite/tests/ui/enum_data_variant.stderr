@@ -1,0 +1,5 @@
+error: serde-lax v0.1 supports only non-generic structs with named fields and enums whose variants are all unit variants
+ --> tests/ui/enum_data_variant.rs:3:5
+  |
+3 |     Value(u64),
+  |     ^^^^^^^^^^

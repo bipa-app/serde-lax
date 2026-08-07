@@ -49,7 +49,22 @@ enum Status {
     Paid,
 }
 
-let invoice: Invoice = serde_lax::from_str(json)?;
+let json = r#"
+{
+  "id": 1,
+  "amount": "1500",
+  "lineItems": [{"sku": "widget", "quantity": 2}],
+  "status": "canceled"
+}
+"#;
+let error = match serde_lax::from_str::<Invoice>(json) {
+    Ok(_) => panic!("must fail"),
+    Err(error) => error,
+};
+assert_eq!(
+    error.to_string(),
+    "failed to decode into object `Invoice`: 2 issues\n  at $.amount: expected u64, found string \"1500\"\n  at $.status: expected one of \"Pending\" | \"Paid\", found string \"canceled\"",
+);
 ```
 
 Entry points, all returning `Result<T, serde_lax::Error>`:
