@@ -3,6 +3,10 @@ use std::collections::{BTreeMap, HashMap};
 
 use crate::{Context, FromJson};
 
+fn narrow<S, T: TryFrom<S>>(n: S) -> Option<T> {
+    T::try_from(n).ok()
+}
+
 macro_rules! impl_unsigned {
     ($($ty:ty),*) => {$(
         impl FromJson for $ty {
@@ -11,10 +15,8 @@ macro_rules! impl_unsigned {
             }
 
             fn from_json(value: &serde_json::Value, cx: &mut Context) -> Option<Self> {
-                if let Some(n) = value.as_u64() {
-                    if let Ok(v) = Self::try_from(n) {
-                        return Some(v);
-                    }
+                if let Some(v) = value.as_u64().and_then(narrow::<u64, Self>) {
+                    return Some(v);
                 }
                 cx.mismatch(Self::expected(), value);
                 None
@@ -31,10 +33,8 @@ macro_rules! impl_signed {
             }
 
             fn from_json(value: &serde_json::Value, cx: &mut Context) -> Option<Self> {
-                if let Some(n) = value.as_i64() {
-                    if let Ok(v) = Self::try_from(n) {
-                        return Some(v);
-                    }
+                if let Some(v) = value.as_i64().and_then(narrow::<i64, Self>) {
+                    return Some(v);
                 }
                 cx.mismatch(Self::expected(), value);
                 None
@@ -43,40 +43,8 @@ macro_rules! impl_signed {
     )*};
 }
 
-impl_unsigned!(u8, u16, u32, usize);
-impl_signed!(i8, i16, i32, isize);
-
-impl FromJson for u64 {
-    fn expected() -> Cow<'static, str> {
-        Cow::Borrowed("u64")
-    }
-
-    fn from_json(value: &serde_json::Value, cx: &mut Context) -> Option<Self> {
-        match value.as_u64() {
-            Some(n) => Some(n),
-            None => {
-                cx.mismatch(Self::expected(), value);
-                None
-            }
-        }
-    }
-}
-
-impl FromJson for i64 {
-    fn expected() -> Cow<'static, str> {
-        Cow::Borrowed("i64")
-    }
-
-    fn from_json(value: &serde_json::Value, cx: &mut Context) -> Option<Self> {
-        match value.as_i64() {
-            Some(n) => Some(n),
-            None => {
-                cx.mismatch(Self::expected(), value);
-                None
-            }
-        }
-    }
-}
+impl_unsigned!(u8, u16, u32, u64, usize);
+impl_signed!(i8, i16, i32, i64, isize);
 
 impl FromJson for f64 {
     fn expected() -> Cow<'static, str> {
@@ -323,6 +291,62 @@ mod tests {
     }
 
     #[test]
+    fn sixty_four_bit_extremes_decode() {
+        assert_eq!(
+            from_value::<u64>(&json!(18_446_744_073_709_551_615_u64)).expect("decodes"),
+            u64::MAX
+        );
+        assert_eq!(
+            from_value::<i64>(&json!(-9_223_372_036_854_775_808_i64)).expect("decodes"),
+            i64::MIN
+        );
+        assert_eq!(
+            from_value::<usize>(&json!(18_446_744_073_709_551_615_u64)).expect("decodes"),
+            usize::MAX
+        );
+        assert_eq!(
+            from_value::<isize>(&json!(-9_223_372_036_854_775_808_i64)).expect("decodes"),
+            isize::MIN
+        );
+    }
+
+    #[test]
+    fn just_out_of_range_integers_are_rejected() {
+        assert_eq!(
+            decode_err::<u32>(&json!(4_294_967_296_u64)).to_string(),
+            "failed to decode into u32: 1 issue\n  at $: expected u32, found number 4294967296"
+        );
+        assert_eq!(
+            decode_err::<i32>(&json!(-2_147_483_649_i64)).to_string(),
+            "failed to decode into i32: 1 issue\n  at $: expected i32, found number -2147483649"
+        );
+        assert_eq!(
+            decode_err::<u8>(&json!(256)).to_string(),
+            "failed to decode into u8: 1 issue\n  at $: expected u8, found number 256"
+        );
+        assert_eq!(
+            decode_err::<i8>(&json!(-129)).to_string(),
+            "failed to decode into i8: 1 issue\n  at $: expected i8, found number -129"
+        );
+    }
+
+    #[test]
+    fn narrow_integer_types_reject_floats_and_negatives() {
+        assert_eq!(
+            decode_err::<u16>(&json!(1.5)).to_string(),
+            "failed to decode into u16: 1 issue\n  at $: expected u16, found number 1.5"
+        );
+        assert_eq!(
+            decode_err::<i16>(&json!(1.5)).to_string(),
+            "failed to decode into i16: 1 issue\n  at $: expected i16, found number 1.5"
+        );
+        assert_eq!(
+            decode_err::<u16>(&json!(-1)).to_string(),
+            "failed to decode into u16: 1 issue\n  at $: expected u16, found number -1"
+        );
+    }
+
+    #[test]
     fn negative_number_for_unsigned_is_a_mismatch() {
         assert_eq!(
             decode_err::<u64>(&json!(-3)).to_string(),
@@ -428,6 +452,15 @@ mod tests {
     }
 
     #[test]
+    fn hash_map_issues_follow_key_sorted_iteration_order() {
+        let err = decode_err::<HashMap<String, u64>>(&json!({"z": "x", "a": "y"}));
+        assert_eq!(
+            err.to_string(),
+            "failed to decode into object of u64: 2 issues\n  at $.a: expected u64, found string \"y\"\n  at $.z: expected u64, found string \"x\""
+        );
+    }
+
+    #[test]
     fn map_mismatch_on_non_object() {
         assert_eq!(
             decode_err::<BTreeMap<String, bool>>(&json!([])).to_string(),
@@ -455,13 +488,12 @@ mod tests {
 
     #[test]
     fn long_found_strings_are_truncated() {
-        let long = "a".repeat(60);
+        let long = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
         let err = decode_err::<u64>(&json!(long));
-        let expected = format!(
-            "failed to decode into u64: 1 issue\n  at $: expected u64, found string \"{}…\"",
-            "a".repeat(40)
+        assert_eq!(
+            err.to_string(),
+            "failed to decode into u64: 1 issue\n  at $: expected u64, found string \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa…\""
         );
-        assert_eq!(err.to_string(), expected);
     }
 
     #[test]

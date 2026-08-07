@@ -40,7 +40,11 @@ impl Error {
         }
     }
 
-    /// Every issue found while decoding, in document/encounter order.
+    /// Every issue found while decoding, in deterministic traversal order:
+    /// array elements come in index order; objects decoded through the map
+    /// impls follow `serde_json`'s map iteration order (sorted by key, since
+    /// `serde-lax` does not enable `preserve_order`); derived structs walk
+    /// their fields in declaration order.
     ///
     /// Empty for syntax errors.
     #[must_use]
@@ -211,15 +215,20 @@ mod tests {
 
     #[test]
     fn long_strings_are_truncated_to_forty_chars() {
-        let long = "x".repeat(50);
-        let expected = format!("string \"{}…\"", "x".repeat(40));
-        assert_eq!(describe_value(&json!(long)), expected);
+        let long = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx";
+        assert_eq!(
+            describe_value(&json!(long)),
+            "string \"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx…\""
+        );
     }
 
     #[test]
     fn forty_char_strings_are_not_truncated() {
-        let exact = "y".repeat(40);
-        assert_eq!(describe_value(&json!(exact)), format!("string \"{exact}\""));
+        let exact = "yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy";
+        assert_eq!(
+            describe_value(&json!(exact)),
+            "string \"yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy\""
+        );
     }
 
     #[test]

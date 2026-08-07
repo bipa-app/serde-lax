@@ -21,19 +21,35 @@ impl Context {
     }
 
     /// Runs `f` with the object key `key` pushed onto the current path.
+    ///
+    /// The segment is popped even if `f` panics, so a caught panic cannot
+    /// corrupt the paths of issues recorded afterwards.
     pub fn with_key<T>(&mut self, key: &str, f: impl FnOnce(&mut Context) -> T) -> T {
-        self.path.push(Segment::Key(key.to_owned()));
-        let out = f(self);
-        self.path.pop();
-        out
+        self.with_segment(Segment::Key(key.to_owned()), f)
     }
 
     /// Runs `f` with the array index `index` pushed onto the current path.
+    ///
+    /// The segment is popped even if `f` panics, so a caught panic cannot
+    /// corrupt the paths of issues recorded afterwards.
     pub fn with_index<T>(&mut self, index: usize, f: impl FnOnce(&mut Context) -> T) -> T {
-        self.path.push(Segment::Index(index));
-        let out = f(self);
-        self.path.pop();
-        out
+        self.with_segment(Segment::Index(index), f)
+    }
+
+    fn with_segment<T>(&mut self, segment: Segment, f: impl FnOnce(&mut Context) -> T) -> T {
+        struct PopOnDrop<'a> {
+            cx: &'a mut Context,
+        }
+
+        impl Drop for PopOnDrop<'_> {
+            fn drop(&mut self) {
+                self.cx.path.pop();
+            }
+        }
+
+        self.path.push(segment);
+        let guard = PopOnDrop { cx: self };
+        f(guard.cx)
     }
 
     /// Records a type mismatch at the current path: `expected` describes the
@@ -95,5 +111,18 @@ mod tests {
         assert_eq!(issues.len(), 2);
         assert_eq!(issues[0].path.to_string(), "$.outer[3]");
         assert_eq!(issues[1].path.to_string(), "$");
+    }
+
+    #[test]
+    fn path_is_restored_when_a_scoped_closure_panics() {
+        let mut cx = Context::new();
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            cx.with_key("abandoned", |_cx| panic!("boom"));
+        }));
+        assert!(outcome.is_err());
+        cx.custom("recorded after the panic");
+        let issues = cx.into_issues();
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].path.to_string(), "$");
     }
 }

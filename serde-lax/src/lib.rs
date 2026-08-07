@@ -90,6 +90,13 @@ pub trait FromJson: Sized {
 
     /// Decode from parsed JSON. On failure, record issue(s) on `cx` and
     /// return `None`.
+    ///
+    /// # Contract
+    ///
+    /// Returning `None` MUST be accompanied by at least one issue recorded on
+    /// `cx`. An implementation that returns `None` silently does not slip
+    /// through: [`from_value`] turns the violation into a loud
+    /// [`IssueKind::Custom`] issue instead of succeeding.
     fn from_json(value: &serde_json::Value, cx: &mut Context) -> Option<Self>;
 }
 
@@ -197,10 +204,10 @@ mod tests {
         let err = super::from_str::<bool>("{ \"a\": ").expect_err("must fail");
         assert!(err.is_syntax());
         assert!(err.issues().is_empty());
-        let rendered = err.to_string();
-        assert!(rendered.starts_with("failed to parse JSON: "), "{rendered}");
-        assert!(rendered.contains("line"), "{rendered}");
-        assert!(rendered.contains("column"), "{rendered}");
+        assert_eq!(
+            err.to_string(),
+            "failed to parse JSON: EOF while parsing a value at line 1 column 7"
+        );
     }
 
     #[test]
