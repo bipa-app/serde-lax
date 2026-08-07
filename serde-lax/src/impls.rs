@@ -300,10 +300,12 @@ mod tests {
             from_value::<i64>(&json!(-9_223_372_036_854_775_808_i64)).expect("decodes"),
             i64::MIN
         );
+        #[cfg(target_pointer_width = "64")]
         assert_eq!(
             from_value::<usize>(&json!(18_446_744_073_709_551_615_u64)).expect("decodes"),
             usize::MAX
         );
+        #[cfg(target_pointer_width = "64")]
         assert_eq!(
             from_value::<isize>(&json!(-9_223_372_036_854_775_808_i64)).expect("decodes"),
             isize::MIN
