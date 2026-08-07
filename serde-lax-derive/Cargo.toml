@@ -9,3 +9,8 @@ repository.workspace = true
 
 [lib]
 proc-macro = true
+
+[dependencies]
+syn = "2"
+quote = "1"
+proc-macro2 = "1"
