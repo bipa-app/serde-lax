@@ -1,0 +1,19 @@
+[package]
+name = "serde-lax"
+version = "0.1.0"
+description = "Lax JSON decoding with precise, multi-issue error messages for when APIs don't match their docs"
+keywords = ["serde", "json", "errors", "deserialize", "debugging"]
+categories = ["encoding"]
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+default = ["derive"]
+derive = ["dep:serde-lax-derive"]
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde-lax-derive = { version = "=0.1.0", path = "../serde-lax-derive", optional = true }

@@ -1,0 +1,12 @@
+[package]
+name = "serde-lax-test-suite"
+version = "0.1.0"
+publish = false
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dev-dependencies]
+serde-lax = { path = "../serde-lax" }
+serde_json = { workspace = true }

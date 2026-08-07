@@ -1,0 +1,13 @@
+[workspace]
+members = ["serde-lax", "serde-lax-derive", "test-suite"]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+rust-version = "1.75"
+license = "MIT"
+repository = "https://github.com/bipa-app/serde-lax"
+
+[workspace.dependencies]
+serde = "1"
+serde_json = "1"

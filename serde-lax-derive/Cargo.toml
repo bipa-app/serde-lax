@@ -1,0 +1,11 @@
+[package]
+name = "serde-lax-derive"
+version = "0.1.0"
+description = "Derive macro for serde-lax"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+proc-macro = true

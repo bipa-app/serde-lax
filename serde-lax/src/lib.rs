@@ -1,0 +1,204 @@
+//! Lax JSON decoding with precise, multi-issue error messages.
+//!
+//! Real-world APIs return JSON that does not match their docs, and serde's
+//! first-failure errors are hard to debug. `serde-lax` parses the input to a
+//! [`serde_json::Value`] first (accept anything on the wire), then walks the
+//! value into the target type, collecting **every** mismatch with the exact
+//! JSON path, the expected type, and a description of what was actually found.
+//!
+//! # Example
+//!
+//! The derive is not ready yet, so this example hand-implements [`FromJson`]
+//! for a tiny struct and decodes bad JSON:
+//!
+//! ```
+//! use std::borrow::Cow;
+//!
+//! use serde_lax::{Context, FromJson};
+//!
+//! #[derive(Debug)]
+//! struct Payment {
+//!     id: u64,
+//!     memo: Option<String>,
+//! }
+//!
+//! impl FromJson for Payment {
+//!     fn expected() -> Cow<'static, str> {
+//!         Cow::Borrowed("Payment object")
+//!     }
+//!
+//!     fn from_json(value: &serde_json::Value, cx: &mut Context) -> Option<Self> {
+//!         let Some(obj) = value.as_object() else {
+//!             cx.mismatch(Self::expected(), value);
+//!             return None;
+//!         };
+//!         let id = match obj.get("id") {
+//!             Some(v) => cx.with_key("id", |cx| u64::from_json(v, cx)),
+//!             None => {
+//!                 cx.missing_field("id", u64::expected());
+//!                 None
+//!             }
+//!         };
+//!         let memo = match obj.get("memo") {
+//!             Some(v) => cx.with_key("memo", |cx| Option::<String>::from_json(v, cx)),
+//!             None => Some(None),
+//!         };
+//!         Some(Payment {
+//!             id: id?,
+//!             memo: memo?,
+//!         })
+//!     }
+//! }
+//!
+//! let err = serde_lax::from_str::<Payment>(r#"{"memo": 7}"#).unwrap_err();
+//! assert_eq!(
+//!     err.to_string(),
+//!     "failed to decode into Payment object: 2 issues\n  \
+//!      at $.id: missing required field (expected u64)\n  \
+//!      at $.memo: expected string, found number 7"
+//! );
+//! ```
+
+mod context;
+mod error;
+mod impls;
+mod path;
+
+pub use context::Context;
+pub use error::{Error, Issue, IssueKind};
+pub use path::{Path, Segment};
+
+/// Derive macro for [`FromJson`]-based decoding.
+///
+/// Currently a placeholder that produces a compile error when used; a later
+/// release ships the real implementation.
+#[cfg(feature = "derive")]
+pub use serde_lax_derive::Deserialize;
+
+/// Decode a value from already-parsed JSON, collecting every mismatch.
+pub trait FromJson: Sized {
+    /// Short human description of what this type expects, e.g. "u64",
+    /// "string", "array of u64".
+    fn expected() -> std::borrow::Cow<'static, str>;
+
+    /// Decode from parsed JSON. On failure, record issue(s) on `cx` and
+    /// return `None`.
+    fn from_json(value: &serde_json::Value, cx: &mut Context) -> Option<Self>;
+}
+
+/// Decode `T` from an already-parsed [`serde_json::Value`].
+///
+/// Returns an [`Error`] carrying every issue found while walking the value.
+///
+/// # Errors
+///
+/// Returns an error if the value does not match `T`; [`Error::issues`] lists
+/// every mismatch with its JSON path.
+pub fn from_value<T: FromJson>(value: &serde_json::Value) -> Result<T, Error> {
+    let mut cx = Context::new();
+    let decoded = T::from_json(value, &mut cx);
+    match decoded {
+        Some(v) if cx.issue_count() == 0 => Ok(v),
+        Some(_) => Err(Error::decode(T::expected(), cx.into_issues())),
+        None => {
+            if cx.issue_count() == 0 {
+                cx.custom("decoding failed without a recorded issue (bug in a FromJson impl)");
+            }
+            Err(Error::decode(T::expected(), cx.into_issues()))
+        }
+    }
+}
+
+/// Parse a JSON string and decode it into `T`.
+///
+/// # Errors
+///
+/// Returns a syntax error if the input is not valid JSON (see
+/// [`Error::is_syntax`]), or a decode error listing every mismatch.
+pub fn from_str<T: FromJson>(s: &str) -> Result<T, Error> {
+    let value: serde_json::Value = serde_json::from_str(s).map_err(Error::syntax)?;
+    from_value(&value)
+}
+
+/// Parse JSON bytes and decode them into `T`.
+///
+/// # Errors
+///
+/// Returns a syntax error if the input is not valid JSON (see
+/// [`Error::is_syntax`]), or a decode error listing every mismatch.
+pub fn from_slice<T: FromJson>(bytes: &[u8]) -> Result<T, Error> {
+    let value: serde_json::Value = serde_json::from_slice(bytes).map_err(Error::syntax)?;
+    from_value(&value)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::borrow::Cow;
+
+    use super::{Context, FromJson};
+
+    #[derive(Debug)]
+    struct SilentFailure;
+
+    impl FromJson for SilentFailure {
+        fn expected() -> Cow<'static, str> {
+            Cow::Borrowed("silent failure")
+        }
+
+        fn from_json(_value: &serde_json::Value, _cx: &mut Context) -> Option<Self> {
+            None
+        }
+    }
+
+    #[derive(Debug)]
+    struct RecordsButSucceeds;
+
+    impl FromJson for RecordsButSucceeds {
+        fn expected() -> Cow<'static, str> {
+            Cow::Borrowed("records but succeeds")
+        }
+
+        fn from_json(_value: &serde_json::Value, cx: &mut Context) -> Option<Self> {
+            cx.custom("suspicious value");
+            Some(RecordsButSucceeds)
+        }
+    }
+
+    #[test]
+    fn none_without_issues_gets_a_custom_bug_issue() {
+        let err = super::from_str::<SilentFailure>("null").expect_err("must fail");
+        assert!(!err.is_syntax());
+        assert_eq!(err.issues().len(), 1);
+        assert_eq!(
+            err.to_string(),
+            "failed to decode into silent failure: 1 issue\n  at $: decoding failed without a recorded issue (bug in a FromJson impl)"
+        );
+    }
+
+    #[test]
+    fn some_with_recorded_issues_is_still_an_error() {
+        let err = super::from_str::<RecordsButSucceeds>("null").expect_err("must fail");
+        assert_eq!(err.issues().len(), 1);
+        assert_eq!(
+            err.to_string(),
+            "failed to decode into records but succeeds: 1 issue\n  at $: suspicious value"
+        );
+    }
+
+    #[test]
+    fn syntax_error_keeps_line_and_column() {
+        let err = super::from_str::<bool>("{ \"a\": ").expect_err("must fail");
+        assert!(err.is_syntax());
+        assert!(err.issues().is_empty());
+        let rendered = err.to_string();
+        assert!(rendered.starts_with("failed to parse JSON: "), "{rendered}");
+        assert!(rendered.contains("line"), "{rendered}");
+        assert!(rendered.contains("column"), "{rendered}");
+    }
+
+    #[test]
+    fn from_slice_decodes() {
+        let v: Vec<u64> = super::from_slice(b"[1, 2]").expect("decodes");
+        assert_eq!(v, vec![1, 2]);
+    }
+}
