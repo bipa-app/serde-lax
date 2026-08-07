@@ -3,10 +3,12 @@ use std::fmt;
 
 use crate::path::{self, Path};
 
+const MAX_DISPLAYED_ISSUES: usize = 100;
+
 /// A decoding or JSON-syntax error.
 ///
-/// Implements [`fmt::Display`] with one header line and one indented line per
-/// issue:
+/// Implements [`fmt::Display`] with one header line and up to the first 100
+/// indented issue lines. [`Error::issues`] always contains the full list:
 ///
 /// ```text
 /// failed to decode into array of u64: 2 issues
@@ -70,7 +72,7 @@ impl fmt::Display for Error {
                 let count = issues.len();
                 let noun = if count == 1 { "issue" } else { "issues" };
                 write!(f, "failed to decode into {target}: {count} {noun}")?;
-                for issue in issues {
+                for issue in issues.iter().take(MAX_DISPLAYED_ISSUES) {
                     write!(f, "\n  at ")?;
                     match &issue.kind {
                         IssueKind::Mismatch { expected, found } => {
@@ -84,6 +86,14 @@ impl fmt::Display for Error {
                         IssueKind::Custom { message } => {
                             write!(f, "{}: {message}", issue.path)?;
                         }
+                    }
+                }
+                if count > MAX_DISPLAYED_ISSUES {
+                    let hidden_count = count - MAX_DISPLAYED_ISSUES;
+                    if hidden_count == 1 {
+                        write!(f, "\n  … and 1 more issue (not shown)")?;
+                    } else {
+                        write!(f, "\n  … and {hidden_count} more issues (not shown)")?;
                     }
                 }
                 Ok(())
@@ -200,6 +210,62 @@ mod tests {
         assert_eq!(
             err.to_string(),
             "failed to decode into array of Event: 1 issue\n  at $[1]: timestamp is in the future"
+        );
+    }
+
+    fn mismatched_array(issue_count: usize) -> Error {
+        let input = format!("[{}]", vec![r#""bad""#; issue_count].join(","));
+        crate::from_str::<Vec<u64>>(&input).expect_err("array elements must mismatch")
+    }
+
+    #[test]
+    fn display_renders_all_one_hundred_issues_without_summary() {
+        let err = mismatched_array(100);
+        let rendered = err.to_string();
+        let lines = rendered.lines().collect::<Vec<_>>();
+
+        assert_eq!(err.issues().len(), 100);
+        assert_eq!(lines.len(), 101);
+        assert_eq!(lines[0], "failed to decode into array of u64: 100 issues");
+        assert_eq!(
+            lines.last().copied(),
+            Some("  at $[99]: expected u64, found string \"bad\"")
+        );
+        assert!(!rendered.contains("not shown"));
+    }
+
+    #[test]
+    fn display_summarizes_one_issue_over_the_cap() {
+        let err = mismatched_array(101);
+        let lines = err
+            .to_string()
+            .lines()
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+
+        assert_eq!(err.issues().len(), 101);
+        assert_eq!(lines.len(), 102);
+        assert_eq!(lines[0], "failed to decode into array of u64: 101 issues");
+        assert_eq!(
+            lines.last().map(String::as_str),
+            Some("  … and 1 more issue (not shown)")
+        );
+    }
+
+    #[test]
+    fn display_summarizes_multiple_issues_over_the_cap() {
+        let err = mismatched_array(102);
+        let lines = err
+            .to_string()
+            .lines()
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+
+        assert_eq!(err.issues().len(), 102);
+        assert_eq!(lines[0], "failed to decode into array of u64: 102 issues");
+        assert_eq!(
+            lines.last().map(String::as_str),
+            Some("  … and 2 more issues (not shown)")
         );
     }
 

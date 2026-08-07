@@ -107,6 +107,7 @@ Supported shapes: structs with named fields, and enums where every variant is a 
 - `Option<T>` treats both missing and `null` as `None`.
 - Unknown JSON fields are ignored.
 - JSON-only by design.
+- Rendered errors show at most the first 100 issues, with a `… and N more issues (not shown)` summary line; `Error::issues()` always contains all of them.
 - Implementations provided for: integers, floats, `bool`, `String`, `Option`, `Vec`, `HashMap`/`BTreeMap`, `Box`, `serde_json::Value`.
 - **Status:** 0.1.0 — early release. The API may change based on feedback.
 
