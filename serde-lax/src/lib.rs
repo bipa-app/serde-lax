@@ -210,6 +210,57 @@ mod tests {
         );
     }
 
+    fn assert_syntax_error(input: &str, expected_first_line: &str) {
+        let err = super::from_str::<serde_json::Value>(input).expect_err("must fail");
+        assert!(err.is_syntax());
+        assert!(err.issues().is_empty());
+        assert_eq!(err.to_string().lines().next(), Some(expected_first_line));
+    }
+
+    #[test]
+    fn json_spec_syntax_errors_are_classified_and_rendered() {
+        assert_syntax_error(
+            "1e309",
+            "failed to parse JSON: number out of range at line 1 column 5",
+        );
+        assert_syntax_error(
+            "NaN",
+            "failed to parse JSON: expected value at line 1 column 1",
+        );
+        assert_syntax_error(
+            "Infinity",
+            "failed to parse JSON: expected value at line 1 column 1",
+        );
+        assert_syntax_error(
+            r#""\uD800""#,
+            "failed to parse JSON: unexpected end of hex escape at line 1 column 8",
+        );
+        assert_syntax_error(
+            r#"{"a":1} x"#,
+            "failed to parse JSON: trailing characters at line 1 column 9",
+        );
+    }
+
+    #[test]
+    fn deeply_nested_json_is_a_syntax_error() {
+        let input = format!("{}0{}", "[".repeat(200), "]".repeat(200));
+        assert_syntax_error(
+            &input,
+            "failed to parse JSON: recursion limit exceeded at line 1 column 128",
+        );
+    }
+
+    #[test]
+    fn root_level_scalars_decode() {
+        assert_eq!(super::from_str::<u64>("42").expect("decodes"), 42);
+        assert_eq!(super::from_str::<String>(r#""hi""#).expect("decodes"), "hi");
+        assert!(super::from_str::<bool>("true").expect("decodes"));
+        assert_eq!(
+            super::from_str::<Option<u64>>("null").expect("decodes"),
+            None
+        );
+    }
+
     #[test]
     fn from_slice_decodes() {
         let v: Vec<u64> = super::from_slice(b"[1, 2]").expect("decodes");

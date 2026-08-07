@@ -69,7 +69,15 @@ impl FromJson for f32 {
 
     fn from_json(value: &serde_json::Value, cx: &mut Context) -> Option<Self> {
         match value.as_f64() {
-            Some(n) => Some(n as f32),
+            Some(n) => {
+                let narrowed = n as f32;
+                if n.is_finite() && !narrowed.is_finite() {
+                    cx.mismatch(Self::expected(), value);
+                    None
+                } else {
+                    Some(narrowed)
+                }
+            }
             None => {
                 cx.mismatch(Self::expected(), value);
                 None
@@ -365,11 +373,14 @@ mod tests {
     }
 
     #[test]
-    fn floats_accept_any_number() {
+    fn floats_accept_representable_numbers() {
         assert_eq!(from_value::<f64>(&json!(1.5)).expect("decodes"), 1.5);
         assert_eq!(from_value::<f64>(&json!(3)).expect("decodes"), 3.0);
         assert_eq!(from_value::<f32>(&json!(2.5)).expect("decodes"), 2.5);
         assert_eq!(from_value::<f32>(&json!(-4)).expect("decodes"), -4.0);
+        assert_eq!(from_value::<f32>(&json!(3.5)).expect("decodes"), 3.5);
+        assert_eq!(from_value::<f32>(&json!(0.1)).expect("decodes"), 0.1);
+        assert_eq!(from_value::<f64>(&json!(1e300)).expect("decodes"), 1e300);
 
         assert_eq!(
             decode_err::<f64>(&json!("1.5")).to_string(),
@@ -378,6 +389,60 @@ mod tests {
         assert_eq!(
             decode_err::<f32>(&json!(null)).to_string(),
             "failed to decode into f32: 1 issue\n  at $: expected f32, found null"
+        );
+    }
+
+    #[test]
+    fn f32_rejects_finite_numbers_that_overflow() {
+        assert_eq!(
+            decode_err::<f32>(&json!(1e300)).to_string(),
+            "failed to decode into f32: 1 issue\n  at $: expected f32, found number 1e+300"
+        );
+        assert_eq!(
+            decode_err::<f32>(&json!(-1e300)).to_string(),
+            "failed to decode into f32: 1 issue\n  at $: expected f32, found number -1e+300"
+        );
+    }
+
+    #[test]
+    fn negative_zero_decodes_as_f64_and_not_i64() {
+        let value: serde_json::Value = serde_json::from_str("-0").expect("valid JSON");
+        assert_eq!(
+            decode_err::<i64>(&value).to_string(),
+            "failed to decode into i64: 1 issue\n  at $: expected i64, found number -0.0"
+        );
+        let decoded = from_value::<f64>(&value).expect("decodes");
+        assert_eq!(decoded, -0.0);
+        assert!(decoded.is_sign_negative());
+    }
+
+    #[test]
+    fn exponent_forms_remain_floats() {
+        let integer_exponent: serde_json::Value = serde_json::from_str("1e2").expect("valid JSON");
+        assert_eq!(
+            decode_err::<u64>(&integer_exponent).to_string(),
+            "failed to decode into u64: 1 issue\n  at $: expected u64, found number 100.0"
+        );
+        assert_eq!(
+            from_value::<f64>(&integer_exponent).expect("decodes"),
+            100.0
+        );
+
+        let fractional_exponent: serde_json::Value =
+            serde_json::from_str("1.5e1").expect("valid JSON");
+        assert_eq!(
+            from_value::<f64>(&fractional_exponent).expect("decodes"),
+            15.0
+        );
+    }
+
+    #[test]
+    fn integer_beyond_u64_range_is_reported_as_lossy_float() {
+        let value: serde_json::Value =
+            serde_json::from_str("123456789012345678901234567890").expect("valid JSON");
+        assert_eq!(
+            decode_err::<u64>(&value).to_string(),
+            "failed to decode into u64: 1 issue\n  at $: expected u64, found number 1.2345678901234568e+29"
         );
     }
 
@@ -454,6 +519,33 @@ mod tests {
     }
 
     #[test]
+    fn duplicate_object_keys_keep_last_value_from_str() {
+        let decoded =
+            crate::from_str::<HashMap<String, u64>>(r#"{"a": 1, "a": 2}"#).expect("decodes");
+        assert_eq!(decoded, HashMap::from([(String::from("a"), 2)]));
+    }
+
+    #[test]
+    fn duplicate_object_keys_keep_last_value_from_value() {
+        let value: serde_json::Value =
+            serde_json::from_str(r#"{"a": 1, "a": 2}"#).expect("valid JSON");
+        let decoded = from_value::<HashMap<String, u64>>(&value).expect("decodes");
+        assert_eq!(decoded, HashMap::from([(String::from("a"), 2)]));
+    }
+
+    #[test]
+    fn empty_containers_decode() {
+        assert_eq!(
+            from_value::<Vec<u64>>(&json!([])).expect("decodes"),
+            Vec::<u64>::new()
+        );
+        assert_eq!(
+            from_value::<HashMap<String, u64>>(&json!({})).expect("decodes"),
+            HashMap::new()
+        );
+    }
+
+    #[test]
     fn hash_map_issues_follow_key_sorted_iteration_order() {
         let err = decode_err::<HashMap<String, u64>>(&json!({"z": "x", "a": "y"}));
         assert_eq!(
@@ -485,6 +577,15 @@ mod tests {
         assert_eq!(
             err.to_string(),
             "failed to decode into object of u64: 1 issue\n  at $[\"weird key\"]: expected u64, found null"
+        );
+    }
+
+    #[test]
+    fn unicode_map_keys_are_quoted_in_paths() {
+        let err = decode_err::<HashMap<String, u64>>(&json!({"ключ": null}));
+        assert_eq!(
+            err.to_string(),
+            "failed to decode into object of u64: 1 issue\n  at $[\"ключ\"]: expected u64, found null"
         );
     }
 
